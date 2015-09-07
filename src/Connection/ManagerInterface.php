@@ -2,43 +2,39 @@
 namespace Disque\Connection;
 
 use Disque\Command\CommandInterface;
+use Disque\Connection\Factory\ConnectionFactoryInterface;
 
 interface ManagerInterface
 {
     /**
-     * Get the connection implementation class
+     * Get the connection factory
      *
-     * @return string A fully classified class name that implements `Disque\Connection\ConnectionInterface`
+     * @return ConnectionFactoryInterface
      */
-    public function getConnectionClass();
+    public function getConnectionFactory();
 
     /**
-     * Set the connection implementation class
+     * Set the connection factory
      *
-     * @param string $class A fully classified class name that must implement `Disque\Connection\ConnectionInterface`
+     * @param ConnectionFactoryInterface $connectionFactory
+     */
+    public function setConnectionFactory(ConnectionFactoryInterface $connectionFactory);
+
+    /**
+     * Get credentials to all initially available nodes
+     *
+     * @return Credentials[]
+     */
+    public function getCredentials();
+
+    /**
+     * Add new server credentials
+     *
+     * @param Credentials $credentials
+     *
      * @return void
-     * @throws InvalidArgumentException
      */
-    public function setConnectionClass($class);
-
-    /**
-     * Get available servers
-     *
-     * @return array Each server is an indexed array with `host` and `port`
-     */
-    public function getServers();
-
-    /**
-     * Add a new server
-     *
-     * @param string $host Host
-     * @param int $port Port
-     * @param string $password Password to use when connecting to this server
-     * @param array $options Connection options
-     * @return void
-     * @throws InvalidArgumentException
-     */
-    public function addServer($host, $port = 7711, $password = null, array $options = []);
+    public function addServer(Credentials $credentials);
 
     /**
      * If a node has produced at least these number of jobs, switch there
@@ -58,7 +54,8 @@ interface ManagerInterface
     /**
      * Connect to Disque
      *
-     * @return array Connected node information
+     * @return Node The current node
+     *
      * @throws AuthenticationException
      * @throws ConnectionException
      */

@@ -4,6 +4,7 @@ namespace Disque\Test\Connection;
 use Closure;
 use DateTime;
 use InvalidArgumentException;
+use Metadata\Tests\Driver\Fixture\C\SubDir\C;
 use Mockery as m;
 use PHPUnit_Framework_TestCase;
 use Disque\Command\Auth;
@@ -17,6 +18,7 @@ use Disque\Connection\ConnectionInterface;
 use Disque\Connection\Manager;
 use Disque\Connection\Response\ResponseException;
 use Disque\Connection\Socket;
+use Disque\Connection\Credentials;
 
 class MockManager extends Manager
 {
@@ -107,58 +109,24 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         m::close();
     }
 
-    public function testAddServerInvalidHost()
-    {
-        $this->setExpectedException(InvalidArgumentException::class, 'Invalid server specified');
-        $m = new Manager();
-        $m->addServer(128);
-    }
-
-    public function testAddServerInvalidPort()
-    {
-        $this->setExpectedException(InvalidArgumentException::class, 'Invalid server specified');
-        $m = new Manager();
-        $m->addServer('127.0.0.1', false);
-    }
-
     public function testAddServer()
     {
         $m = new Manager();
-        $m->addServer('127.0.0.1', 7712);
-        $this->assertEquals([
-            ['host' => '127.0.0.1', 'port' => 7712, 'password' => null, 'options' => []],
-        ], $m->getServers());
-    }
-
-    public function testAddServerDefaultPort()
-    {
-        $m = new Manager();
-        $m->addServer('other.host');
-        $this->assertEquals([
-            ['host' => 'other.host', 'port' => 7711, 'password' => null, 'options' => []],
-        ], $m->getServers());
-    }
-
-    public function testAddServerPassword()
-    {
-        $m = new Manager();
-        $m->addServer('127.0.0.1', 7712, 'my_password');
-        $this->assertEquals([
-            ['host' => '127.0.0.1', 'port' => 7712, 'password' => 'my_password', 'options' => []],
-        ], $m->getServers());
+        $s = new Credentials('127.0.0.1', 7712);
+        $m->addServer($s);
+        $this->assertEquals([$s], array_values($m->getCredentials()));
     }
 
     public function testAddServers()
     {
         $m = new Manager();
-        $m->addServer('127.0.0.1', 7711, 'my_password1');
-        $m->addServer('127.0.0.1', 7712);
-        $m->addServer('127.0.0.1', 7713, 'my_password3');
-        $this->assertEquals([
-            ['host' => '127.0.0.1', 'port' => 7711, 'password' => 'my_password1', 'options' => []],
-            ['host' => '127.0.0.1', 'port' => 7712, 'password' => null, 'options' => []],
-            ['host' => '127.0.0.1', 'port' => 7713, 'password' => 'my_password3', 'options' => []],
-        ], $m->getServers());
+        $s1 = new Credentials('127.0.0.1', 7711, 'my_password1');
+        $m->addServer($s1);
+        $s2 = new Credentials('127.0.0.1', 7712);
+        $m->addServer($s2);
+        $s3 = new Credentials('127.0.0.1', 7713, 'my_password3');
+        $m->addServer($s3);
+        $this->assertEquals([$s1, $s2, $s3], array_values($m->getCredentials()));
     }
 
     public function testDefaultConnectionClass()
@@ -189,7 +157,7 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         ];
         $m = new MockManager();
         $m->setAvailableConnection($available);
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testConnect()
@@ -219,39 +187,15 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         ], $m->getNodes());
     }
 
-    public function testConnectWithOptions()
-    {
-        $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711, null, ['test' => 'stuff']);
-        $m->setAvailableConnection(false); // Passthru
-
-        $connection = m::mock(ConnectionInterface::class)
-            ->shouldReceive('connect')
-            ->with(['test' => 'stuff'])
-            ->once()
-            ->shouldReceive('execute')
-            ->with(m::type(Hello::class))
-            ->andReturn([
-                'v1',
-                'id1',
-                ['id1', '127.0.0.1', 7711, 'v1'],
-                ['id2', '127.0.0.1', 7712, 'v1']
-            ])
-            ->mock();
-
-        $m->setBuildConnection($connection);
-        $m->connect([]);
-    }
-
     public function testConnectWithPasswordMissingPassword()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711);
+        $m->addServer(new Credentials('127.0.0.1', 7711));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Hello::class))
@@ -262,18 +206,18 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         $m->setBuildConnection($connection);
 
         $this->setExpectedException(AuthenticationException::class, 'NOAUTH Authentication Required');
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testConnectWithPasswordWrongPassword()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711, 'wrong_password');
+        $m->addServer(new Credentials('127.0.0.1', 7711, 'wrong_password'));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Auth::class))
@@ -284,18 +228,18 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         $m->setBuildConnection($connection);
 
         $this->setExpectedException(ConnectionException::class, 'No servers available');
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testConnectWithPasswordWrongResponse()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711, 'right_password');
+        $m->addServer(new Credentials('127.0.0.1', 7711, 'right_password'));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Auth::class))
@@ -306,18 +250,18 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         $m->setBuildConnection($connection);
 
         $this->setExpectedException(ConnectionException::class, 'No servers available');
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testConnectWithPasswordRightPassword()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711, 'right_password');
+        $m->addServer(new Credentials('127.0.0.1', 7711, 'right_password'));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Auth::class))
@@ -334,7 +278,7 @@ class ManagerTest extends PHPUnit_Framework_TestCase
             ->mock();
 
         $m->setBuildConnection($connection);
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testFindAvailableConnectionNoneSpecifiedConnectThrowsException()
@@ -342,13 +286,13 @@ class ManagerTest extends PHPUnit_Framework_TestCase
         $m = new MockManager();
         $m->setAvailableConnection(false); // Passthru
         $this->setExpectedException(ConnectionException::class, 'No servers available');
-        $m->connect([]);
+        $m->connect();
     }
 
     public function testFindAvailableConnectionNoneAvailableConnectThrowsException()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711);
+        $m->addServer(new Credentials('127.0.0.1', 7711));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
@@ -368,12 +312,12 @@ class ManagerTest extends PHPUnit_Framework_TestCase
     public function testFindAvailableConnectionSucceedsFirst()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711);
+        $m->addServer(new Credentials('127.0.0.1', 7711));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Hello::class))
@@ -383,7 +327,7 @@ class ManagerTest extends PHPUnit_Framework_TestCase
 
         $m->setBuildConnection($connection);
 
-        $result = $m->connect([]);
+        $result = $m->connect();
         $this->assertSame([
             'version' => 'version',
             'id' => 'id',
@@ -401,17 +345,17 @@ class ManagerTest extends PHPUnit_Framework_TestCase
     public function testFindAvailableConnectionSucceedsSecond()
     {
         $m = new MockManager();
-        $m->addServer('127.0.0.1', 7711);
-        $m->addServer('127.0.0.1', 7712);
+        $m->addServer(new Credentials('127.0.0.1', 7711));
+        $m->addServer(new Credentials('127.0.0.1', 7712));
         $m->setAvailableConnection(false); // Passthru
 
         $connection = m::mock(ConnectionInterface::class)
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->andThrow(new ConnectionException('Mocking ConnectionException'))
             ->once()
             ->shouldReceive('connect')
-            ->with([])
+            ->with(null, null)
             ->once()
             ->shouldReceive('execute')
             ->with(m::type(Hello::class))
@@ -421,7 +365,7 @@ class ManagerTest extends PHPUnit_Framework_TestCase
 
         $m->setBuildConnection($connection);
 
-        $result = $m->connect([]);
+        $result = $m->connect();
         $this->assertSame([
             'version' => 'version',
             'id' => 'id',
@@ -439,11 +383,11 @@ class ManagerTest extends PHPUnit_Framework_TestCase
     public function testCustomConnection()
     {
         $m = new Manager();
-        $m->addServer('host', 7799);
+        $m->addServer(new Credentials('host', 7799));
         $m->setConnectionClass(MockConnection::class);
 
         try {
-            $m->connect([]);
+            $m->connect();
             $this->fail('An expected ' . ConnectionException::class . ' was not raised');
         } catch (ConnectionException $e) {
             $this->assertSame('No servers available', $e->getMessage());

@@ -11,22 +11,18 @@ If you want to run its tests remove the `--no-dev` argument.
 # Creating the client
 
 First you will need to create an instance of `Disque\Client`, specifying a list
-of hosts and ports where different Disque nodes are installed:
+of server credentials where different Disque nodes are installed:
 
 ```php
-$client = new \Disque\Client([
-    '127.0.0.1:7711',
-    '127.0.0.1:7712'
-]);
-```
+use Disque\Connection\Credentials;
+use Disque\Client;
 
-If no host is specified, no server is initialized. Hosts can also be added
-via the `addServer($host, $port, $password)` method:
+$nodes = [
+    new Credentials('127.0.0.1', 7711),
+    new Credentials('127.0.0.1', 7712, 'password'),
+];
 
-```php
-$client = new \Disque\Client();
-$client->addServer('127.0.0.1', 7711, 'my_password');
-$client->addServer('127.0.0.1', 7712);
+$client = new Client($nodes);
 ```
 
 Now you are ready to start interacting with Disque. This library provides a 
@@ -336,14 +332,14 @@ the job data and doing the actual work in a dedicated worker class.
 ## Connecting
 
 When using the Client API directly (that is, using the commands provided by
-`\Disque\Client`), you will have to connect manually.. You can connect via
+`\Disque\Client`), you will have to connect manually. You can connect via
 the `connect()` method. As recommended by Disque, the connection is done 
 as follows:
 
 * The list of hosts is used to pick a random server.
 * A connection is attempted against the picked server. If it fails, another
 random node is tried.
-* If a connection is successfull, the `HELLO` command is issued against this
+* If a connection is successful, the `HELLO` command is issued against this
 server. If this fails, another random node is tried.
 * If no connection is established and there are no servers left, a
 `Disque\Connection\ConnectionException` is thrown.
@@ -351,21 +347,16 @@ server. If this fails, another random node is tried.
 Example call:
 
 ```php
-$client = new \Disque\Client([
-    '127.0.0.1:7711',
-    '127.0.0.1:7712'
-]);
-$result = $client->connect();
-var_dump($result);
-```
+use Disque\Connection\Credentials;
+use Disque\Client;
 
-You can also specify servers that require a password for connection. To do so,
-use the `addServer()` method, like so:
+$nodes = [
+    new Credentials('127.0.0.1', 7711),
+    new Credentials('127.0.0.1', 7712, 'password'),
+];
 
-```php
-$client = new \Disque\Client();
-$client->addServer('127.0.0.1', 7711, 'my_password');
-$client->addServer('127.0.0.1, 7712, 'my_password2');
+$client = new Client($nodes);
+
 $result = $client->connect();
 var_dump($result);
 ```
@@ -423,10 +414,15 @@ specify how many jobs are required to be produced by a specific node before
 we automatically switch connection to that node. For example if we do:
 
 ```php
-$disque = new \Disque\Client([
-    '127.0.0.1:7711',
-    '127.0.0.2:7712'
-]);
+use Disque\Connection\Credentials;
+use Disque\Client;
+
+$nodes = [
+    new Credentials('127.0.0.1', 7711),
+    new Credentials('127.0.0.1', 7712),
+];
+
+$disque = new Client($nodes);
 $disque->connect();
 ```
 
