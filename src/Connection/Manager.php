@@ -2,10 +2,12 @@
 namespace Disque\Connection;
 
 use Disque\Connection\Node\Node;
+use Disque\Connection\Node\NodePrioritizerInterface;
+use Disque\Connection\Node\ConservativeJobCountPrioritizer;
 use Disque\Command\CommandInterface;
 use Disque\Command\GetJob;
 use Disque\Command\Response\HelloResponse;
-use \Disque\Command\Response\JobsResponse;
+use Disque\Command\Response\JobsResponse;
 use Disque\Connection\Factory\ConnectionFactoryInterface;
 use Disque\Connection\Factory\SocketFactory;
 
@@ -36,11 +38,15 @@ class Manager implements ManagerInterface
     protected $credentials = [];
 
     /**
-     * If a node has produced at least these number of jobs, switch there
+     * A strategy to prioritize nodes and find the best one to switch to
      *
-     * @var int
+     * The default strategy is the ConservativeJobCountPrioritizer. It
+     * prioritizes nodes by their job count, but prefers the current node
+     * in order to avoid switching until there is a clearly better node.
+     *
+     * @var NodePrioritizerInterface
      */
-    protected $minimumJobsToChangeNode = 0;
+    protected $priorityStrategy;
 
     /**
      * List of nodes, ie Disque instances available in the cluster
@@ -79,6 +85,7 @@ class Manager implements ManagerInterface
     public function __construct()
     {
         $this->connectionFactory = new SocketFactory();
+        $this->priorityStrategy = new ConservativeJobCountPrioritizer();
     }
 
     /**
@@ -118,9 +125,17 @@ class Manager implements ManagerInterface
     /**
      * @inheritdoc
      */
-    public function setMinimumJobsToChangeNode($minimumJobsToChangeNode)
+    public function getPriorityStrategy()
     {
-        $this->minimumJobsToChangeNode = $minimumJobsToChangeNode;
+        return $this->priorityStrategy;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function setPriorityStrategy($priorityStrategy)
+    {
+        $this->priorityStrategy = $priorityStrategy;
     }
 
     /**
@@ -150,17 +165,10 @@ class Manager implements ManagerInterface
     public function execute(CommandInterface $command)
     {
         $this->shouldBeConnected();
+        $command = $this->preprocessExecution($command);
         $response = $this->nodes[$this->nodeId]->getConnection()->execute($command);
-        if ($command instanceof GetJob) {
-            $this->updateNodeStats($command->parse($response));
-            $this->switchNodeIfNeeded();
-        }
+        $response = $this->postprocessExecution($command, $response);
         return $response;
-    }
-
-    public function getNodes()
-    {
-        return $this->nodes;
     }
 
     /**
@@ -204,11 +212,56 @@ class Manager implements ManagerInterface
     }
 
     /**
+     * Reset node counters that should be reset upon node switch
+     */
+    protected function resetNodeCounters()
+    {
+        foreach($this->nodes as $node) {
+            $node->resetJobCount();
+        }
+    }
+
+    /**
+     * Hook into the command execution and do anything before it's executed
+     *
+     * Eg. start measuring node latency etc.
+     *
+     * @param CommandInterface $command
+     *
+     * @return CommandInterface $command
+     */
+    protected function preprocessExecution(CommandInterface $command)
+    {
+        return $command;
+    }
+
+    /**
+     * Postprocess the command execution, eg. update node stats
+     *
+     * @param CommandInterface $command
+     * @param mixed            $response
+     *
+     * @return mixed
+     * @throws ConnectionException
+     */
+    protected function postprocessExecution(
+        CommandInterface $command,
+        $response
+    ) {
+        if ($command instanceof GetJob) {
+            $this->updateNodeStats($command->parse($response));
+            $this->switchNodeIfNeeded();
+        }
+
+        return $response;
+    }
+
+    /**
      * Update node counters indicating how many jobs the node has produced
      *
      * @param array $jobs Jobs
      */
-    private function updateNodeStats(array $jobs)
+    protected function updateNodeStats(array $jobs)
     {
         foreach ($jobs as $job) {
             $nodeId = $this->getNodeIdFromJobId($job[JobsResponse::KEY_ID]);
@@ -223,34 +276,42 @@ class Manager implements ManagerInterface
 
     /**
      * Decide if we should switch to a better node
+     *
+     * @throws ConnectionException
      */
     private function switchNodeIfNeeded()
     {
-        // TODO: Implement the node prioritizer
-        $sortedNodes = $this->nodePrioritizer->sort(
+        $sortedNodes = $this->priorityStrategy->sort(
             $this->nodes,
             $this->nodeId
         );
 
+        // Try to connect by priority, continue on error, return on success
         foreach($sortedNodes as $nodeCandidate) {
             if ($nodeCandidate->getId() === $this->nodeId) {
                 return;
             }
 
-            if ($nodeCandidate->getConnection()->isConnected() === false) {
-                try {
+            try {
+                if ($nodeCandidate->getConnection()->isConnected()) {
+                    // Say a new HELLO to the node, the cluster might have changed
+                    $nodeCandidate->sayHello();
+                } else {
                     $nodeCandidate->connect();
-                } catch (ConnectionException $e) {
-                    continue;
                 }
+            } catch (ConnectionException $e) {
+                continue;
             }
 
             $this->switchToNode($nodeCandidate);
+            return;
         }
+
+        throw new ConnectionException('Could not switch to any node');
     }
 
     /**
-     * Get node ID based off a Job ID
+     * Get a node ID based off a Job ID
      *
      * @param string       $jobId Job ID
      * @return string|null        Node ID
@@ -321,17 +382,16 @@ class Manager implements ManagerInterface
      */
     private function switchToNode(Node $node)
     {
-        if ($this->nodeId === $node->getId()) {
+        $nodeId = $node->getId();
+        if ($this->nodeId === $nodeId) {
             return;
         }
 
-        $this->nodeId = $node->getId();
+        $this->resetNodeCounters();
 
-        $this->nodes = [];
-        $this->nodes[$this->nodeId] = $node;
-
-        $hello = $node->getHello();
-        $this->revealClusterFromHello($hello);
+        $this->nodeId = $nodeId;
+        $this->nodes[$nodeId] = $node;
+        $this->revealClusterFromHello($node);
     }
 
     /**
@@ -341,18 +401,23 @@ class Manager implements ManagerInterface
      * nodes in the cluster. We want to learn about them and save them, so that
      * we can switch to them later, if needed.
      *
-     * @param array $hello
+     * @param Node $node The current node
      */
-    private function revealClusterFromHello(array $hello)
+    private function revealClusterFromHello(Node $node)
     {
+        $hello = $node->getHello();
+        $revealedNodes = [];
+
         foreach ($hello[HelloResponse::NODES] as $node) {
             $id = $node[HelloResponse::NODE_ID];
 
             $prefix = substr($id, Node::PREFIX_START, Node::PREFIX_LENGTH);
             $this->nodePrefixes[$prefix] = $id;
 
-            if ($this->nodeId === $id) {
-                // The current node has already been added, don't overwrite it
+            // Copy existing nodes over, don't overwrite them. We would lose
+            // their stats and connection
+            if (isset($this->nodes[$id])) {
+                $revealedNodes[$id] = $this->nodes[$id];
                 continue;
             }
 
@@ -361,13 +426,16 @@ class Manager implements ManagerInterface
             $credentials = new Credentials($host, $port);
 
             $address = $credentials->getAddress();
-            // Check if the node credentials have already been set by the user
-            // The user-supplied credentials may contain a password
+            // If there are user-supplied credentials for this node, use them.
+            // They may contain a password
             if (isset($this->credentials[$address])) {
                 $credentials = $this->credentials[$address];
             }
 
-            $this->nodes[$id] = $this->createNode($credentials);
+            // Create a new Node object for a newly revealed node
+            $revealedNodes[$id] = $this->createNode($credentials);
         }
+
+        $this->nodes = $revealedNodes;
     }
 }

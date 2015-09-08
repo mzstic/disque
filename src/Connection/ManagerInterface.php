@@ -3,6 +3,7 @@ namespace Disque\Connection;
 
 use Disque\Command\CommandInterface;
 use Disque\Connection\Factory\ConnectionFactoryInterface;
+use Disque\Connection\Node\NodePrioritizerInterface;
 
 interface ManagerInterface
 {
@@ -37,12 +38,18 @@ interface ManagerInterface
     public function addServer(Credentials $credentials);
 
     /**
-     * If a node has produced at least these number of jobs, switch there
+     * Get the current node prioritizer
      *
-     * @param int $minimumJobsToChangeNode Set to 0 to never change
-     * @return void
+     * @return NodePrioritizerInterface
      */
-    public function setMinimumJobsToChangeNode($minimumJobsToChangeNode);
+    public function getPriorityStrategy();
+
+    /**
+     * Set the node priority strategy
+     *
+     * @param NodePrioritizerInterface $priorityStrategy
+     */
+    public function setPriorityStrategy($priorityStrategy);
 
     /**
      * Tells if connection is established

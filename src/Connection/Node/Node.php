@@ -132,7 +132,7 @@ class Node
     }
 
     /**
-     * Get the node's HELLO response
+     * Get the node's last HELLO response
      *
      * @return array
      */
@@ -222,6 +222,27 @@ class Node
     }
 
     /**
+     * Say a new HELLO to the node and parse the response
+     *
+     * @return array The HELLO response
+     *
+     * @throws ConnectionException
+     */
+    public function sayHello()
+    {
+        $helloCommand = new Hello();
+        $helloResponse = $this->connection->execute($helloCommand);
+        $this->hello = $helloCommand->parse($helloResponse);
+
+        $this->id = $this->hello[HelloResponse::NODE_ID];
+        $this->createPrefix($this->id);
+
+        $this->version = $this->hello[HelloResponse::NODE_VERSION];
+
+        return $this->hello;
+    }
+
+    /**
      * Connect to the node
      *
      * @throws ConnectionException
@@ -250,23 +271,6 @@ class Node
                 throw new AuthenticationException();
             }
         }
-    }
-
-    /**
-     * Say HELLO to the node and parse the response
-     *
-     * @throws ConnectionException
-     */
-    private function sayHello()
-    {
-        $helloCommand = new Hello();
-        $helloResponse = $this->connection->execute($helloCommand);
-        $this->hello = $helloCommand->parse($helloResponse);
-
-        $this->id = $this->hello[HelloResponse::NODE_ID];
-        $this->createPrefix($this->id);
-
-        $this->version = $this->hello[HelloResponse::NODE_VERSION];
     }
 
     /**
