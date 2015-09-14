@@ -22,7 +22,7 @@ $nodes = [
     new Credentials('127.0.0.1', 7712, 'password'),
 ];
 
-$client = new Client($nodes);
+$disque = new Client($nodes);
 ```
 
 Now you are ready to start interacting with Disque. This library provides a 
@@ -179,7 +179,7 @@ while (true) {
 
 ## Acknowledging jobs
 
-Once you have processed a job succesfully, you will need to acknowledge it, to
+Once you have processed a job successfully, you will need to acknowledge it, to
 avoid Disque from putting it back on the queue 
 ([details from Disque itself](https://github.com/antirez/disque#give-me-the-details)).
 You do so via the `processed()` method, like so:
@@ -355,9 +355,9 @@ $nodes = [
     new Credentials('127.0.0.1', 7712, 'password'),
 ];
 
-$client = new Client($nodes);
+$disque = new Client($nodes);
 
-$result = $client->connect();
+$result = $disque->connect();
 var_dump($result);
 ```
 
@@ -389,7 +389,7 @@ The above `connect()` call will return an output similar to the following:
 By default disque-php does not require any other packages or libraries. It has
 its own connector to Disque, that is fast and focused. If you wish to instead
 use another connector to handle the connection with Disque, you can specify
-so via the `setConnectionImplementation()` method. For example, if you wish
+so via the `setConnectionFactory()` method. For example, if you wish
 to use [predis](https://github.com/nrk/predis) (maybe because you are already
 using its PHP extension), you would first add predis to your Composer
 requirements:
@@ -398,20 +398,19 @@ requirements:
 $ composer require predis/predis --no-dev
 ```
 
-And then configure the connection implementation class:
+And then inject the connection factory:
 
 ```php
-$client->getConnectionManager()->setConnectionClass(\Disque\Connection\Predis::class);
+$connectionFactory = new Disque\Connection\Factory\PredisFactory();
+$client->getConnectionManager()->setConnectionFactory($connectionFactory);
 ```
 
-### Smart node connection based on jobs being fetched
+### Node priority - Choosing the best node to switch to
 
 [Disque suggests](https://github.com/antirez/disque#client-libraries) that if a
 consumer sees a high message rate received from a specific node, then clients
 should connect to that node directly to reduce the number of messages between
-nodes. To achieve this, disquephp connection manager has a method that allows you to
-specify how many jobs are required to be produced by a specific node before
-we automatically switch connection to that node. For example if we do:
+nodes. For example imagine the following cluster:
 
 ```php
 use Disque\Connection\Credentials;
@@ -427,17 +426,8 @@ $disque->connect();
 ```
 
 We are currently connected to one of these nodes (no guarantee as to which one
-since nodes are selected randomly.) Say that we are connected to the node at
-port `7711`. By default no automatic connection change will take place, so we
-will always be connected to the selected node. Say that we want to switch to
-a node the moment a specific node produces at least 3 jobs. We first set this
-option via the manager:
-
-```php
-$disque->getManager()->setMinimumJobsToChangeNode(3);
-```
-
-Now we process jobs as we normally do:
+since nodes are selected randomly). Say that we are connected to the node at
+port `7711`. Now we process jobs as we normally do:
 
 ```php
 while ($job = $disque->getJob()) {
@@ -447,9 +437,60 @@ while ($job = $disque->getJob()) {
 }
 ```
 
-If a specific node produces at least 3 jobs, the connection will automatically
-switch to the node producing these many jobs. This is all done behind the
-scenes, automatically.
+If the node at port `7712` produces more jobs than our current node,
+the connection will automatically switch to the node producing these jobs.
+This is all done behind the scenes, automatically.
+
+To achieve this:
+
+* The disquephp connection manager watches how many jobs a given node has 
+ produced so far and updates the stats for each node
+* It asks a node prioritizer regularly, whether it should switch to a better
+ node. The prioritizer gets a list of all nodes with their stats and decides.
+* The connection manager gets a list of nodes sorted by priority and it tries 
+ to switch to the best available node.
+ 
+There are currently two stats that the nodes are tracking:
+
+* The number of jobs produced altogether
+* The number of jobs produced since the last switch
+
+The default strategy is the conservative job count strategy, implemented
+in the class `Disque\Connection\Node\ConservativeJobCountPrioritizer`. It
+switches to a new node if this node has produced more jobs than the current
+node, but only if the number of jobs is 5% higher than the number of jobs
+produced by the current node. This safety margin stops the manager
+from switching if the difference is too small.
+You can change the safety margin in this strategy. For example to set
+the safety margin to 15%, you would call:
+```php
+$connectionManager = $client->getConnectionManager();
+$connectionManager->getPriorityStrategy()->setMarginToSwitch(0.15);
+```
+
+There are two other prioritizing strategies:
+ 
+* The null strategy, implemented in `Disque\Connection\Node\NullPrioritizer`
+ never switches.
+* The random strategy, `Disque\Connection\Node\RandomPrioritizer` switches
+to nodes randomly. This may be useful for testing your cluster.
+
+If you would like to write your own strategy, implement the interface
+`Disque\Connection\Node\NodePrioritizerInterface` and inject the strategy
+into the manager by calling
+`$connectionManager->setPriorityStrategy($customStrategy);`
+
+If you would like to track other stats for your nodes, for example latency,
+inherit the `Disque\Connection\Node\Node` to add setters and getters for
+the new stats, then inherit the `Disque\Connection\Manager` and override its
+methods
+`Manager::preprocessExecution()` and
+`Manager::postprocessExecution()`
+
+Here you can update the node stats.
+
+Finally, inject the new Manager into the Client via
+`$client->setConnectionManager($customManager);`
 
 ## Commands
 
