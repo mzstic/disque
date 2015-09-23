@@ -60,7 +60,7 @@ class ClientTest extends PHPUnit_Framework_TestCase
             new Credentials('127.0.0.1', '7712'),
         ];
 
-        $c = new MockClient($nodes);
+        $c = new Client($nodes);
         $this->assertEquals(
             $nodes,
             array_values($c->getConnectionManager()->getCredentials()));
